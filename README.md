@@ -5,5 +5,4 @@ The project is inspired by the [nuclei](https://github.com/projectdiscovery/nucl
 
 ## Examples
 
-### Standard Usage
-To scan for targets which could have SMB Ghost vulnerability in file `smb_smbghost_check.yaml`, the following signature example can be used:
+To be developed
