@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -140,7 +141,7 @@ func execGrepSearch(grepBin string, folderToScan string, regex string,
 // `excludePatterns` defines the paths to ignore when running the grep search
 func worker(sigFileContents map[string]signFileStruct, sigFiles chan string,
 	grepBin string, folderToScan string, excludePatterns []string,
-	wg *sync.WaitGroup) {
+	outfolder string, wg *sync.WaitGroup) {
 
 	// Need to let the waitgroup know that the function is done at the end...
 	defer wg.Done()
@@ -178,11 +179,21 @@ func worker(sigFileContents map[string]signFileStruct, sigFiles chan string,
 			outfile := myCheck.Outfile
 			if outfile != "" {
 
+				// Write the results to the outfolder if provided
+				if outfolder != "" {
+					outfolder, _ = filepath.Abs(outfolder)
+					outfile = path.Join(outfolder, outfile)
+				}
+
 				// Get the command and web request output together to write to file
 				contentToWrite := cmdsOutput + "\n"
 
 				// Write output to file
-				ioutil.WriteFile(outfile, []byte(contentToWrite), 0644)
+				err := ioutil.WriteFile(outfile, []byte(contentToWrite), 0777)
+				if err != nil {
+					log.Fatalf("Error when writing to file: %s. Error: %+v\n",
+						outfile, err)
+				}
 
 				// Let user know that we wrote results to an output file
 				log.Printf("[*] Wrote results to outfile: %s\n", outfile)
@@ -202,6 +213,7 @@ func main() {
 		"Default 'grep' binary path")
 	excludePtr := flag.String("e", "", "Exclude file e.g. *.js")
 	folderToScanPtr := flag.String("f", "", "File or Folder to scan")
+	outfolderPtr := flag.String("o", "out-codereview", "Output folder to write output files")
 
 	flag.Parse()
 
@@ -209,6 +221,7 @@ func main() {
 	grepBin := *grepBinPtr
 	exclude := *excludePtr
 	folderToScan := *folderToScanPtr
+	outfolder := *outfolderPtr
 
 	// Check if logging should be enabled
 	verbose := *verbosePtr
@@ -217,10 +230,25 @@ func main() {
 		log.SetOutput(ioutil.Discard)
 	}
 
+	// Check if the grep binary exists
+	grepOut := execCmd("grep")
+	grepBinFound := strings.Contains(grepOut, "usage:")
+	if !grepBinFound {
+		fmt.Printf("[-] Cannot find grep binary: %s. Does it exist?\n",
+			grepBin)
+		log.Fatalf("[-] Cannot read grep binary: %s. Does it exist?",
+			grepBin)
+	}
+
 	// Check if folder to scan provided
 	if folderToScan == "" {
 		fmt.Printf("[-] Folder to scan must be provided\n")
 		log.Fatalf("[-] Folder to scan must be provided")
+	}
+
+	// Create ouput folder to write files
+	if outfolder != "" {
+		_ = os.Mkdir(outfolder, 0777)
 	}
 
 	// Check if folder to scan exists
@@ -323,7 +351,7 @@ func main() {
 		log.Printf("Launching goroutine: %d for assessing folder: %s\n", i,
 			folderToScan)
 		go worker(sigFileContents, sigFilesChan, grepBin, folderToScan,
-			excludePatterns, &wg)
+			excludePatterns, outfolder, &wg)
 	}
 
 	// Loop through each signature file and pass it to each thread to process
