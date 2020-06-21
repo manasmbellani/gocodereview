@@ -3,13 +3,10 @@ package main
 //Script used to scan the specified input YAML file for
 //signature and run the scan
 import (
-	"bufio"
 	"flag"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,21 +16,19 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// Delim - Delimiter to use when parsing output via regex itself
-const Delim = "|"
+// DefLinesBefore - Lines to display before the match
+const DefLinesBefore = "2"
 
-// DefLinesBefore - Default number of lines to display from before
-const DefLinesBefore = 2
+// DefLinesAfter - Lines to display after the match
+const DefLinesAfter = "2"
 
-// DefLinesAfter - Default number of lines to display from after
-const DefLinesAfter = 2
+// DefaultGrepBinPath path - Assume that it is hosted on Grep Bin
+const DefaultGrepBinPath = "grep"
 
 // Format for an Example YAML signature files
 type signFileStruct struct {
-	ID   string `yaml:"id"`
-	Info struct {
-		Name string `yaml:"name"`
-	} `yaml:"info"`
+	ID       string     `yaml:"id"`
+	Name     string     `yaml:"name"`
 	Author   string     `yaml:"author"`
 	Severity string     `yaml:"severity"`
 	Checks   []sigCheck `yaml:"checks"`
@@ -41,8 +36,9 @@ type signFileStruct struct {
 
 // Define a separate struct for checks
 type sigCheck struct {
-	outfile string   `yaml:"outfile"`
+	Outfile string   `yaml:"outfile"`
 	Regex   []string `yaml:"regex"`
+	Notes   string   `yaml:"notes"`
 }
 
 // SIGFILEEXT - Extensions for YAML files
@@ -94,21 +90,9 @@ func parseSigFile(sigFile string) signFileStruct {
 
 // Execute a command to get the output, error. Command is executed when in the
 // optionally specified 'cmdDir' OR it is executed with the current working dir
-func execCmd(cmdToExec string, verbose bool, cmdDir string) string {
-	// Get the original working directory
-	owd, _ := os.Getwd()
+func execCmd(cmdToExec string) string {
 
-	// Switch to the directory
-	if cmdDir != "" {
-		os.Chdir(cmdDir)
-	}
-
-	// Get my current working directory
-	cwd, _ := os.Getwd()
-
-	if verbose {
-		log.Printf("[v] Executing cmd: %s in dir: %s\n", cmdToExec, cwd)
-	}
+	log.Printf("[v] Executing cmd: %s\n", cmdToExec)
 
 	cmd := exec.Command("/bin/bash", "-c", cmdToExec)
 	out, err := cmd.CombinedOutput()
@@ -123,209 +107,146 @@ func execCmd(cmdToExec string, verbose bool, cmdDir string) string {
 		errStr = ""
 	} else {
 		errStr = string(err.Error())
-		//log.Printf("Command Error: %s\n", err)
 	}
 
 	totalOut := (outStr + "\n" + errStr)
-	if verbose {
-		log.Printf("[v] Output of cmd '%s':\n%s\n", cmdToExec, totalOut)
-	}
-
-	// Switch back to the original working directory
-	os.Chdir(owd)
 
 	return totalOut
 }
 
-// Function substitutes target parameters hostname, port in the command to exec
-func subTargetParams(cmdToExec string, targetParams map[string]string) string {
-	for k, v := range targetParams {
-		paramholder := "{" + k + "}"
-		cmdToExec = strings.ReplaceAll(cmdToExec, paramholder, v)
+// Execute a Grep Search for a particular regex on a folder
+func execGrepSearch(grepBin string, folderToScan string, regex string,
+	excludePatterns []string) string {
+	cmd := "{grepBin} --color=always -E -i -r -n -A {DefLinesAfter} -B {DefLinesBefore} \"{regex}\" \"{folderToScan}\""
+	cmd = strings.ReplaceAll(cmd, "{grepBin}", grepBin)
+	cmd = strings.ReplaceAll(cmd, "{regex}", regex)
+	cmd = strings.ReplaceAll(cmd, "{folderToScan}", folderToScan)
+	cmd = strings.ReplaceAll(cmd, "{DefLinesAfter}", DefLinesAfter)
+	cmd = strings.ReplaceAll(cmd, "{DefLinesBefore}", DefLinesBefore)
+
+	if excludePatterns != nil {
+		for _, excludePattern := range excludePatterns {
+			if excludePattern != "" {
+				cmd += " --exclude " + excludePattern
+			}
+		}
 	}
-	return cmdToExec
+
+	return execCmd(cmd)
 }
 
-// Process the command and perform the regex output
-//func parseSigFileContent(signFileStructure signFileStruct) {
-//}
-
-// Worker function parses each YAML signature file, runs relevant commands as
-// present in  each file and performs the matching operation
-func worker(sigFile string, target map[string]string, verbose bool,
+// Worker function parses each YAML signature file, runs a search for the regexes
+// on the folder to scan via the specified grep binary. The specified
+// `excludePatterns` defines the paths to ignore when running the grep search
+func worker(sigFileContents map[string]signFileStruct, sigFiles chan string,
+	grepBin string, folderToScan string, excludePatterns []string,
 	wg *sync.WaitGroup) {
+
 	// Need to let the waitgroup know that the function is done at the end...
 	defer wg.Done()
 
-	// Open the signature file and parse the content
-	sigFileContent := parseSigFile(sigFile)
+	// Check each signature on the folder to scan
+	for sigFile := range sigFiles {
 
-	// ID of the signature
-	sigID := sigFileContent.ID
+		log.Printf("Testing sigfile: %s on folder: %s\n", sigFile, folderToScan)
 
-	// First get the list of all checks to perform from file
-	myChecks := sigFileContent.Checks
+		// Get the signature file content previously opened and read
+		sigFileContent := sigFileContents[sigFile]
 
-	for _, myCheck := range myChecks {
+		// First get the list of all checks to perform from file
+		myChecks := sigFileContent.Checks
 
-		// Get the commmand directory to execute this command in
-		cmdDir := myCheck.CmdDir
+		for _, myCheck := range myChecks {
 
-		// Store commands output
+			cmdsOutput := ""
 
-		// Run all the commands and collect output
-		cmdsOutput := ""
-		requestOutput := ""
-		cmdsToExec := myCheck.Cmd
-		for _, cmdToExec := range cmdsToExec {
+			// Get all the defined regexes for this check
+			regexes := myCheck.Regex
 
-			// Run the commands
-			cmdsToExecSub := subTargetParams(cmdToExec, target)
-			cmdsOutput = cmdsOutput + "\n" + execCmd(cmdsToExecSub, verbose,
-				cmdDir)
-
-			// Check for a match from response
-			matcherFound := runMatch(myCheck, cmdsOutput)
-			if matcherFound {
-				fmt.Println(formatDetection(sigID, target))
-			}
-		}
-
-		// Run any web requests on URLs, if provided
-		urls := myCheck.URLs
-
-		for _, urlToCheck := range urls {
-			httpMethod := strings.ToUpper(myCheck.HTTPMethod)
-			if httpMethod == "" {
-				httpMethod = DefHTTPMethod
+			for _, regex := range regexes {
+				cmdsOutput += execGrepSearch(grepBin, folderToScan, regex,
+					excludePatterns) + "\n"
 			}
 
-			// Build the URL to request + save it
-			urlToCheckSub := subTargetParams(urlToCheck, target)
-			target["fullURLPath"] = urlToCheckSub
-
-			// Build a HTTP request template
-			client := &http.Client{}
-			var body io.Reader
-
-			// Prepare the POST body
-			var strBodyParams []string
-			if myCheck.Body != nil {
-				for _, bodySet := range myCheck.Body {
-					name := bodySet.Name
-					value := bodySet.Value
-					strBodyParams = append(strBodyParams, name+"="+value)
-				}
-			}
-			strBody := strings.Join(strBodyParams, "&")
-			body = strings.NewReader(strBody)
-
-			// Setup a request template
-			req, _ := http.NewRequest(httpMethod, urlToCheckSub, body)
-
-			// Set the user agent string header
-			req.Header.Set("User-Agent", DefUserAgent)
-
-			// Set custom headers if any are provided
-			if myCheck.Headers != nil {
-				for _, header := range myCheck.Headers {
-					name := header.Name
-					value := header.Value
-					req.Header.Set(name, value)
-				}
+			// Are there any special notes? Write them to the output
+			notes := myCheck.Notes
+			if notes != "" {
+				cmdsOutput += "\n[!] " + notes
 			}
 
-			// Verbose message to be printed to let the user know
-			if verbose {
-				log.Printf("Making %s request to URL: %s\n", httpMethod,
-					urlToCheckSub)
-			}
+			// Check if we need to store the output in an  output file
+			outfile := myCheck.Outfile
+			if outfile != "" {
 
-			// Send the web request
-			resp, _ := client.Do(req)
+				// Get the command and web request output together to write to file
+				contentToWrite := cmdsOutput + "\n"
 
-			if resp != nil {
+				// Write output to file
+				ioutil.WriteFile(outfile, []byte(contentToWrite), 0644)
 
-				// Read the response body
-				respBody, _ := ioutil.ReadAll(resp.Body)
-
-				// Read the response status code as string
-				statusCode := fmt.Sprintf("%d", resp.StatusCode)
-
-				// Read the response headers as string
-				respHeaders := resp.Header
-				respHeadersStr := ""
-				s := ""
-				for k, v := range respHeaders {
-					s = fmt.Sprintf("%s=\"%s\"", k, strings.Join(v, ","))
-					respHeadersStr += s + ";"
-				}
-
-				// Combine status code, response headers and body
-				requestOutput = string(statusCode) + "\n" + respHeadersStr + "\n" +
-					string(respBody)
-
-				// Verbose message to be printed to let the user know
-				if verbose {
-					log.Printf("Making %s request to URL: %s\n", httpMethod,
-						urlToCheckSub)
-				}
-
-				// Check for a match from the response
-				matcherFound := runMatch(myCheck, requestOutput)
-				if matcherFound {
-					fmt.Println(formatDetection(sigID, target))
-				}
-			}
-		}
-
-		// Are there any special notes? Write them to the output
-		notes := myCheck.Notes
-		if notes != nil {
-			for _, note := range notes {
-				cmdsOutput += "\n[!] " + note
-			}
-		}
-
-		// Check if we need to store output to output file
-		outfile := myCheck.Outfile
-		if outfile != "" {
-
-			// Get the command and web request output together to write to file
-			contentToWrite := cmdsOutput + "\n" + requestOutput
-
-			// Write output to file
-			outfile = subTargetParams(outfile, target)
-			ioutil.WriteFile(outfile, []byte(contentToWrite), 0644)
-
-			// Let user know that we wrote results to an output file
-			if verbose {
+				// Let user know that we wrote results to an output file
 				log.Printf("[*] Wrote results to outfile: %s\n", outfile)
+
 			}
 		}
-
 	}
+	//log.Printf("Completed check on path: %s\n", target["basepath"])
 }
 
 func main() {
-	pathsWithSigFiles := flag.String("paths", "",
-		"files/folders/file-glob patterns, containing YAML signature files")
-	verbose := flag.Bool("verbose", false, "show commands as executed+output")
+	pathsWithSigFiles := flag.String("s", "",
+		"Files/folders/file-glob patterns, containing YAML signature files")
+	verbosePtr := flag.Bool("v", false, "Show commands as executed+output")
+	maxThreadsPtr := flag.Int("mt", 20, "Max number of goroutines to launch")
+	grepBinPtr := flag.String("gb", DefaultGrepBinPath,
+		"Default 'grep' binary path")
+	excludePtr := flag.String("e", "", "Exclude file e.g. *.js")
+	folderToScanPtr := flag.String("f", "", "File or Folder to scan")
+
 	flag.Parse()
 
-	if *pathsWithSigFiles == "" {
-		log.Fatalln("[-] Signature files must be provided.")
+	maxThreads := *maxThreadsPtr
+	grepBin := *grepBinPtr
+	exclude := *excludePtr
+	folderToScan := *folderToScanPtr
+
+	// Check if logging should be enabled
+	verbose := *verbosePtr
+	if !verbose {
+		log.SetFlags(0)
+		log.SetOutput(ioutil.Discard)
 	}
 
-	// Convert the comma-sep list of files, folders to loop through
+	// Check if folder to scan provided
+	if folderToScan == "" {
+		fmt.Printf("[-] Folder to scan must be provided\n")
+		log.Fatalf("[-] Folder to scan must be provided")
+	}
+
+	// Check if folder to scan exists
+	_, err := os.Stat(folderToScan)
+	if err != nil {
+		fmt.Printf("[-] Cannot read file/folder: %s. Does not exist\n",
+			folderToScan)
+		log.Fatalf("[-] Cannot read file/folder: %s. Does not exist",
+			folderToScan)
+	}
+
+	if *pathsWithSigFiles == "" {
+		fmt.Println("[-] Signature files must be provided.")
+		log.Fatalf("[-] Signature files must be provided.")
+	}
+
+	log.Println("Convert the comma-sep list of files, folders to loop through")
 	pathsToCheck := strings.Split(*pathsWithSigFiles, ",")
 
 	// List of all files in the folders/files above
 	var filesToParse []string
 
-	// Loop through each path and attempt to discover all files
+	log.Println("Loop through each path to to discover all files")
 	for _, pathToCheck := range pathsToCheck {
 		// Check if glob file-pattern provided
+		log.Printf("Reviewing path: %s\n", pathToCheck)
 		if strings.Index(pathToCheck, "*") >= 0 {
 			matchingPaths, _ := filepath.Glob(pathToCheck)
 			for _, matchingPath := range matchingPaths {
@@ -337,7 +258,7 @@ func main() {
 			//Check if file path exists
 			fi, err := os.Stat(pathToCheck)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[-] Path: %s not found\n", pathToCheck)
+				log.Fatalf("[-] Path: %s not found\n", pathToCheck)
 			} else {
 				switch mode := fi.Mode(); {
 
@@ -373,146 +294,45 @@ func main() {
 		}
 	}
 
-	// Get all the Yaml files
+	log.Printf("Total number of files: %d\n", len(filesToParse))
+
+	// Get all the Yaml files filtered based on the extension
 	sigFiles := findSigFiles(filesToParse)
 
-	// Prepare a wait group for concurrent processing of files
-	var wg sync.WaitGroup
+	log.Printf("Number of signature  files: %d\n", len(sigFiles))
 
-	// Read each target info line by line
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		numTargetsRead++
-
-		// Read the hostname/ip address, port OR URL paths from user
-		line := scanner.Text()
-		if line != "" {
-			// Split based on: for hostname & port OR protocol & hostname & port
-			// specified
-			lineSplits := strings.Split(line, ":")
-
-			target := make(map[string]string)
-
-			if len(lineSplits) == 1 {
-
-				target["protocol"] = DefProtocol
-				if target["protocol"] == "aws" {
-					// Input provided: <hostname|aws_profile>/<path>
-					// A Profile is provided if aws is the default protocol
-					target["profile"] = lineSplits[0]
-					target["region"] = DefProfile
-				} else {
-					// Input provided: <hostname> OR <hostname>/<path>
-					hostnamePath := lineSplits[0]
-
-					if strings.Index(hostnamePath, "/") >= 0 {
-						target["hostname"] = strings.Split(hostnamePath, "/")[0]
-						target["path"] = strings.Join(
-							strings.Split(hostnamePath, "/")[1:],
-							"/")
-					} else {
-						target["hostname"] = hostnamePath
-						target["path"] = ""
-					}
-					target["port"] = DefPort
-				}
-			} else if len(lineSplits) == 2 {
-				if strings.Index(lineSplits[1], "//") >= 0 {
-					// Input provided: protocol://<hostname|aws_profile>
-					target["protocol"] = lineSplits[0]
-					if target["protocol"] == "aws" {
-						// Input provided: aws://<hostname|aws_profile>
-						target["profile"] = strings.ReplaceAll(lineSplits[1], "/", "")
-						target["region"] = DefProfile
-					} else {
-						// Input provided: protocol://<hostname>/<path>
-						hostnamePath := strings.Split(lineSplits[1], "//")[1]
-						if strings.Index(hostnamePath, "/") >= 0 {
-							target["hostname"] = strings.Split(hostnamePath, "/")[0]
-							target["path"] = strings.Join(
-								strings.Split(hostnamePath, "/")[1:],
-								"/")
-						} else {
-							target["hostname"] = hostnamePath
-							target["path"] = ""
-						}
-						if target["protocol"] == "https" {
-							target["port"] = "443"
-						} else {
-							target["port"] = "80"
-						}
-					}
-
-				} else {
-					// Input provided: <hostname|aws_profile>:<port|region>
-					target["protocol"] = DefProtocol
-					if target["protocol"] == "aws" {
-						// Input provided: <aws_profile>:<region>
-						target["profile"] = lineSplits[0]
-						target["region"] = lineSplits[1]
-					} else {
-						// Input provided: <hostname>:<port>
-						target["hostname"] = lineSplits[0]
-						portPath := lineSplits[1]
-						if strings.Index(portPath, "/") >= 0 {
-							target["port"] = strings.Split(portPath, "/")[0]
-							target["path"] = strings.Join(
-								strings.Split(portPath, "/")[1:],
-								"/")
-						} else {
-							target["port"] = portPath
-							target["path"] = ""
-						}
-					}
-				}
-			} else {
-				// Input provided: protocol://<hostname|aws_profile>:<port|region>/<path>
-				target["protocol"] = lineSplits[0]
-				if target["protocol"] == "aws" {
-					target["profile"] = strings.ReplaceAll(lineSplits[1], "/", "")
-					target["region"] = lineSplits[2]
-				} else {
-					// Protocol, hostname, port all specified
-					target["hostname"] = strings.ReplaceAll(lineSplits[1], "/", "")
-					portPath := lineSplits[2]
-					if strings.Index(portPath, "/") >= 0 {
-						target["port"] = strings.Split(portPath, "/")[0]
-						target["path"] = strings.Join(
-							strings.Split(portPath, "/")[1:],
-							"/")
-					} else {
-						target["port"] = portPath
-						target["path"] = ""
-					}
-				}
-			}
-
-			// Define a base path on which to run the scan/make request
-			target["basepath"] = target["protocol"] + "://" + target["hostname"] +
-				":" + target["port"]
-			if target["path"] != "" {
-				target["basepath"] += "/" + target["path"]
-
-				// Remove trailing slash in basepath, so URLs created correctly
-				basePath := target["basepath"]
-				if basePath[len(basePath)-1] == '/' {
-					target["basepath"] = basePath[:len(basePath)-1]
-				}
-			}
-
-			// Limit number of hosts/targets processed
-			if *limit > 0 && numTargetsRead > *limit {
-				break
-			}
-
-			// Start processing each file concurrently for the given hostname
-			for _, sigFile := range sigFiles {
-				wg.Add(1)
-				go worker(sigFile, target, *verbose, &wg)
-			}
-		}
+	// parse information from each signature file and store it so it doesn't
+	// have to be read again & again
+	sigFileContents := make(map[string]signFileStruct, len(sigFiles))
+	for _, sigFile := range sigFiles {
+		log.Printf("Parsing signature file: %s\n", sigFile)
+		sigFileContents[sigFile] = parseSigFile(sigFile)
 	}
 
-	// Wait for all threads to end
+	// Parse files to exclude
+	excludePatterns := strings.Split(exclude, ",")
+
+	// Channel of Signature files to parse to each thread to process
+	sigFilesChan := make(chan string)
+
+	// Starting max number of concurrency threads
+	var wg sync.WaitGroup
+	for i := 1; i <= maxThreads; i++ {
+		wg.Add(1)
+
+		log.Printf("Launching goroutine: %d for assessing folder: %s\n", i,
+			folderToScan)
+		go worker(sigFileContents, sigFilesChan, grepBin, folderToScan,
+			excludePatterns, &wg)
+	}
+
+	// Loop through each signature file and pass it to each thread to process
+	for _, sigFile := range sigFiles {
+		sigFilesChan <- sigFile
+	}
+
+	close(sigFilesChan)
+
+	// Wait for all threads to finish processing the regex checks
 	wg.Wait()
 }
