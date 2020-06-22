@@ -27,6 +27,6 @@ checks:
 
 
 $ go run gocodereview.go -f /tmp/test.txt -s /opt/athena-tools-private/codereview/cmdscanner_templates/php_sqlinjection.yaml
-$ ls -1 out-codereview
+$ ls -1 out-codereview/
 out-php-sqlinjection.txt
 ```
