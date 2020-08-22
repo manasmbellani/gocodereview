@@ -96,8 +96,8 @@ func execCmd(cmdToExec string) string {
 	log.Printf("[v] Executing cmd: %s\n", cmdToExec)
 
 	cmd := exec.Command("/bin/bash", "-c", cmdToExec)
-	out, err := cmd.CombinedOutput()
-	var outStr, errStr string
+	out, _ := cmd.CombinedOutput()
+	var outStr string
 	if out == nil {
 		outStr = ""
 	} else {
