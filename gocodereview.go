@@ -168,8 +168,11 @@ func worker(sigFileContents map[string]signFileStruct, sigFiles chan string,
 			regexes := myCheck.Regex
 
 			for _, regex := range regexes {
-				cmdsOutput += execGrepSearch(grepBin, folderToScan, regex,
+				out := execGrepSearch(grepBin, folderToScan, regex,
 					excludePatterns) + "\n"
+				if out != "" {
+					cmdsOutput += out + "\n"
+				}
 			}
 
 			// Are there any special notes? Write them to the output
