@@ -104,17 +104,7 @@ func execCmd(cmdToExec string) string {
 		outStr = strings.TrimSpace(string(out))
 	}
 
-	/*if err == nil {
-		errStr = ""
-	} else {
-		errStr = string(err.Error())
-		if strings.TrimSpace(errStr) == "exit status 1" {
-			errStr = ""
-		}
-	}*/
 	totalOut := outStr
-
-	//totalOut := strings.TrimSpace(outStr + "\n" + errStr)
 
 	return totalOut
 }
