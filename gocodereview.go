@@ -113,7 +113,7 @@ func execCmd(cmdToExec string) string {
 		}
 	}
 
-	totalOut := (outStr + "\n" + errStr)
+	totalOut := strings.TrimSpace(outStr + "\n" + errStr)
 
 	return totalOut
 }
