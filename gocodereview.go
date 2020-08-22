@@ -169,7 +169,7 @@ func worker(sigFileContents map[string]signFileStruct, sigFiles chan string,
 
 			for _, regex := range regexes {
 				out := execGrepSearch(grepBin, folderToScan, regex,
-					excludePatterns) + "\n"
+					excludePatterns)
 				if out != "" {
 					cmdsOutput += out + "\n"
 				}
