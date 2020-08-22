@@ -101,13 +101,16 @@ func execCmd(cmdToExec string) string {
 	if out == nil {
 		outStr = ""
 	} else {
-		outStr = string(out)
+		outStr = strings.TrimSpace(string(out))
 	}
 
 	if err == nil {
 		errStr = ""
 	} else {
 		errStr = string(err.Error())
+		if strings.TrimSpace(errStr) == "exit status 1" {
+			errStr = ""
+		}
 	}
 
 	totalOut := (outStr + "\n" + errStr)
