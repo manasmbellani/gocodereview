@@ -83,7 +83,9 @@ func parseSigFile(sigFile string) signFileStruct {
 	}
 	err = yaml.Unmarshal(yamlFile, &sigFileContent)
 	if err != nil {
-		log.Fatalf("Unmarshal: %v", err)
+		errmsg := fmt.Sprintf("Unmarshal: %v when parsing sig file: %s",
+			err, yamlFile)
+		log.Fatalf(errmsg)
 	}
 
 	return sigFileContent
@@ -204,7 +206,6 @@ func worker(sigFileContents map[string]signFileStruct, sigFiles chan string,
 func main() {
 	pathsWithSigFiles := flag.String("s", "",
 		"Files/folders/file-glob patterns, containing YAML signature files")
-	verbosePtr := flag.Bool("v", false, "Show commands as executed+output")
 	maxThreadsPtr := flag.Int("mt", 20, "Max number of goroutines to launch")
 	grepBinPtr := flag.String("gb", DefaultGrepBinPath,
 		"Default 'grep' binary path")
@@ -219,13 +220,6 @@ func main() {
 	exclude := *excludePtr
 	folderToScan := *folderToScanPtr
 	outfolder := *outfolderPtr
-
-	// Check if logging should be enabled
-	verbose := *verbosePtr
-	if !verbose {
-		log.SetFlags(0)
-		log.SetOutput(ioutil.Discard)
-	}
 
 	// Check if the grep binary exists
 	grepOut := execCmd("grep")
