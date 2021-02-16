@@ -84,7 +84,7 @@ func parseSigFile(sigFile string) signFileStruct {
 	err = yaml.Unmarshal(yamlFile, &sigFileContent)
 	if err != nil {
 		errmsg := fmt.Sprintf("Unmarshal: %v when parsing sig file: %s",
-			err, yamlFile)
+			err, sigFile)
 		log.Fatalf(errmsg)
 	}
 
