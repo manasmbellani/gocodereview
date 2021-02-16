@@ -30,3 +30,6 @@ $ go run gocodereview.go -f /tmp/test.txt -s /opt/athena-tools-private/coderevie
 $ ls -1 out-codereview/
 out-php-sqlinjection.txt
 ```
+
+## TODO
+- [ ] Need to add support for searching files matching given keywords, not just grep search within files
