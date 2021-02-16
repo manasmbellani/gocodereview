@@ -204,22 +204,31 @@ func worker(sigFileContents map[string]signFileStruct, sigFiles chan string,
 }
 
 func main() {
-	pathsWithSigFiles := flag.String("s", "",
+	var pathsWithSigFiles string
+	var maxThreads int
+	var grepBin string
+	var exclude string
+	var folderToScan string
+	var outfolder string
+	var quiet bool
+
+	flag.StringVar(&pathsWithSigFiles, "s", "",
 		"Files/folders/file-glob patterns, containing YAML signature files")
-	maxThreadsPtr := flag.Int("mt", 20, "Max number of goroutines to launch")
-	grepBinPtr := flag.String("gb", DefaultGrepBinPath,
+	flag.IntVar(&maxThreads, "mt", 20, "Max number of goroutines to launch")
+	flag.StringVar(&grepBin, "gb", DefaultGrepBinPath,
 		"Default 'grep' binary path")
-	excludePtr := flag.String("e", "", "Exclude file e.g. *.js")
-	folderToScanPtr := flag.String("f", "", "File or Folder to scan")
-	outfolderPtr := flag.String("o", "out-codereview", "Output folder to write output files")
+	flag.StringVar(&exclude, "e", "", "Exclude file e.g. *.js")
+	flag.StringVar(&folderToScan, "f", "", "File or Folder to scan")
+	flag.StringVar(&outfolder, "o", "out-codereview", "Output folder to write output files")
+	flag.BoolVar(&quiet, "q", false, "Do not print any log messages")
 
 	flag.Parse()
 
-	maxThreads := *maxThreadsPtr
-	grepBin := *grepBinPtr
-	exclude := *excludePtr
-	folderToScan := *folderToScanPtr
-	outfolder := *outfolderPtr
+	// Quiet output if verbose
+	if quiet {
+		log.SetFlags(0)
+		log.SetOutput(ioutil.Discard)
+	}
 
 	// Check if the grep binary exists
 	grepOut := execCmd("grep")
@@ -251,13 +260,13 @@ func main() {
 			folderToScan)
 	}
 
-	if *pathsWithSigFiles == "" {
+	if pathsWithSigFiles == "" {
 		fmt.Println("[-] Signature files must be provided.")
 		log.Fatalf("[-] Signature files must be provided.")
 	}
 
 	log.Println("Convert the comma-sep list of files, folders to loop through")
-	pathsToCheck := strings.Split(*pathsWithSigFiles, ",")
+	pathsToCheck := strings.Split(pathsWithSigFiles, ",")
 
 	// List of all files in the folders/files above
 	var filesToParse []string
